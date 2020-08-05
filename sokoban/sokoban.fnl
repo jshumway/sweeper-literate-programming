@@ -1,4 +1,8 @@
-(local cell-size 23)
+(local cell-size 16)
+
+;; Game polish:
+;; - Render puzzle in center
+;; - Ideally grid would expand as window dimensions changed
 
 (local glyph-player "@")
 (local glyph-player-on-storage "+")
@@ -25,6 +29,10 @@
    :down [0 1]
 })
 
+(local canvas (love.graphics.newCanvas (* 19 cell-size) (* 16 cell-size)))
+(var scale 2)
+(var level-scale-xform nil)
+
 (var levels [])
 
 (var current-level 1)
@@ -37,8 +45,22 @@
       (each [x cell (ipairs row)]
          (tset (. level y) x cell))))
 
+(fn level-bounds [l]
+   (var max-x 0)
+   (each [y row (ipairs l)]
+      (set max-x (math.max max-x (# row))))
+   [max-x (# l)])
+
 (fn load-level []
-   (set-level (. levels current-level)))
+   (let [next-level (. levels current-level)
+         [mx my] (level-bounds next-level)
+         [dx dy] [(- 19 mx) (- 16 my)]
+         xform (love.math.newTransform)]
+
+      (: xform :translate (* 4 dx) (* 4 dy))
+      (set level-scale-xform xform)
+
+      (set-level next-level)))
 
 (fn next-level []
    (set current-level (+ 1 (% current-level (# levels))))
@@ -48,11 +70,18 @@
    (set current-level (+ 1 (% (- current-level 2) (# levels))))
    (load-level))
 
+;; Max level size is [19 16]
+
 (fn love.load []
+   ;; Setup the canvas
+   (: canvas :setFilter "nearest" "nearest")
+
+   ;; Set the graphics state
    (love.graphics.setBackgroundColor 1 1 .75)
+
+   ;; Load the levels and initialize the game
    (set levels (require :levels))
-   (load-level)
-   (pp level))
+   (load-level))
 
 (fn draw-cell [x y glyph]
    (let [px (* (- x 1) cell-size)
@@ -73,11 +102,21 @@
 (fn set-cell [x y v]
    (tset (. level y) x v))
 
-(fn love.draw []
+(fn draw-game []
+   (love.graphics.applyTransform level-scale-xform)
    (each [y row (ipairs level)]
       (each [x cell (ipairs row)]
          (if (~= cell " ")
             (draw-cell x y (get-cell x y))))))
+
+(fn love.draw []
+   (love.graphics.setCanvas canvas)
+   (love.graphics.clear)
+   (love.graphics.setColor 1 1 1)
+   (draw-game)
+   (love.graphics.setCanvas)
+   (love.graphics.setColor 1 1 1)
+   (love.graphics.draw canvas 0 0 0 scale scale))
 
 (fn find-player []
    (var playerX 0)
