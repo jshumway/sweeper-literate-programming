@@ -46,6 +46,8 @@
 (var game-over? false)
 
 (fn init-grid! []
+   (set game-over? false)
+
    ;; prepare blank grid
    (for [y 1 grid-height]
       (tset grid y {})
@@ -74,10 +76,7 @@
 
 (fn love.load []
    (load-images!)
-   (init-grid!)
-   ;; TEMP test new images being drawn
-   (tset grid 1 1 :state :flag)
-   (tset grid 1 2 :state :?))
+   (init-grid!))
 
 (fn draw-tiles-atlas []
    (let [padding 22]
@@ -125,15 +124,19 @@
 })
 
 (fn love.mousereleased [x y button]
-   (let [cell (. grid selected-y selected-x)]
-      (when (= button 1)
-         (when (~= cell.state :flag)
-            (flood-uncover selected-x selected-y)))
+   (when (not game-over?)
+      (let [cell (. grid selected-y selected-x)]
 
-      (when (= button 2)
-         (let [next (. covered-cell-transitions cell.state)]
-            (if next
-               (tset grid selected-y selected-x :state next))))))
+         (when (= button 1)
+            (if cell.flower (set game-over? true)
+
+               (~= cell.state :flag)
+               (flood-uncover selected-x selected-y)))
+
+         (when (= button 2)
+            (let [next (. covered-cell-transitions cell.state)]
+               (if next
+                  (tset grid selected-y selected-x :state next)))))))
 
 
 (fn love.update []
@@ -144,34 +147,41 @@
          (math.floor (+ 1 (/ y tile-draw-size)))))))
 
 (fn draw-tile-for-cell [x y cell]
+   (let [selected? (and (= x selected-x) (= y selected-y))
+         clicking? (love.mouse.isDown 1)
+         adjacent-flowers (surrounding-flowers x y)]
 
-   ;; RULES
-   ;;
-   ;; COVERED => mouse hover -> :covered-hover, else -> :covered
-   ;; FLAG => mouse down -> :covered, else -> :flag
-   ;; QUESTION => mouse down -> :uncovered, else -> :?
-   ;; UNCOVERED => adjacent bombs? -> count, else -> :uncovered
+      (if
 
+         ;; COVERED => mouse hover -> :covered-hover, else -> :covered
+         (= cell.state :covered)
+         (if selected? :covered-hover :else :covered)
 
-
-
-   ;; TODO this doesn't actually work the way the tutorial says it should
-   ;; work. when you click on a flag, it should show as covered, but it doesn't
-   ;; becaues the tile will always be overwritten by the flag. so I need to
-   ;; define the actual behavior needed. let's get back to that.
-   (if (= cell.state :uncovered)
-      :uncovered
-      :else
-      (if (and (= x selected-x) (= y selected-y))
-         (if (love.mouse.isDown 1)
-            (if (= cell.state :flag)
-               :covered
-               :else
-               :uncovered)
+         ;; FLAG => mouse down -> :covered, else -> :flag
+         (= cell.state :flag)
+         (if (and selected? clicking?)
+            :covered
             :else
-            :covered-hover)
-         :else
-         :covered)))
+            :flag)
+
+         ;; QUESTION => mouse down -> :uncovered, else -> :?
+         (= cell.state :?)
+         (if (and selected? clicking?)
+            :uncovered
+            :else
+            :?)
+
+         ;; UNCOVERED =>
+         ;;    flower? -> :flower
+         ;;    adjacent bombs? -> count
+         ;;    else -> :uncovered
+         (= cell.state :uncovered)
+         (if cell.flower
+            :flower
+            (> adjacent-flowers 0)
+            adjacent-flowers
+            :else
+            :uncovered))))
 
 (fn love.draw []
    (for [y 1 grid-height]
@@ -179,24 +189,11 @@
          (let [cell (. grid y x)]
             (var tile (draw-tile-for-cell x y cell))
 
-            ;; TEMP draw all flowers
-            (if (and cell.flower) ; game-over?
-               (set tile :flower)
-               (= cell.state :uncovered)
-               (let [count (surrounding-flowers x y)]
-                  (when (> count 0)
-                     (set tile count))))
+            ;; draw all flowers when game is over
+            (when (and game-over? cell.flower)
+               (set tile :flower))
 
-            (if (= cell.state :flag)
-               (set tile :flag)
-               (= cell.state :?)
-               (set tile :?))
-
-            (draw-tile tile
+            (draw-tile
+               tile
                (* (- x 1) tile-draw-size)
-               (* (- y 1) tile-draw-size)))))
-
-   ; (love.graphics.setColor 0 0 0)
-   ; (love.graphics.print (.. "selected: (" selected-x ", " selected-y ")"))
-   ; (love.graphics.setColor 1 1 1)
-   )
+               (* (- y 1) tile-draw-size))))))
