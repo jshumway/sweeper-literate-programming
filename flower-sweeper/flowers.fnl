@@ -1,8 +1,28 @@
-(local image (love.graphics.newImage "tiles-1.png"))
+;; GAME PARAMS
+
+(local grid-width 19)
+(local grid-height 14)
+
+(local bomb-count 40)
+
+;; APP STATE
+
+;; TODO simplify this
 (local tile-import-size 40)
 (local tile-draw-size 40)
 
+(local image (love.graphics.newImage "tiles-2.png"))
 (local tile-quads [])
+
+;; GAME STATE
+
+(local grid {})
+
+(var selected-x 0)
+(var selected-y 0)
+(var game-over? false)
+(var countdown-mode? false)
+
 
 (local tile-names {
    :covered 1
@@ -11,6 +31,7 @@
    :flower 4
    :flag 5
    :? 6
+   :flag-countdown 7
 })
 
 (fn tile-for-number [n]
@@ -24,26 +45,35 @@
 
 ;; TODO this is kind of gross
 ;; actually the whole flower drawing system is kinda gross
+;; TODO this could be further improved by returning the quad and
+;; letting another function draw
 (fn draw-tile [name x y]
-   (let [quad (if (number? name) (tile-for-number name) :else (tile-quad name))]
-      (love.graphics.draw image quad x y)))
+   (var quad nil)
+
+   (if
+      (number? name)
+      (set quad (tile-for-number name))
+
+      (and countdown-mode? (= :flag name))
+      (set quad (tile-quad :flag-countdown))
+
+      :else
+      (set quad (tile-quad name)))
+
+   (love.graphics.draw image quad x y))
 
 ;; TODO:
-;; - Have a grid that is adjacent bomb counts
-;; - Initialize the bomb placements + adjacent bomb count grid when first tile
-;;   is revealed
-;; - Thus the initial state for a new game is a grid of all uncovered, no bomb
-;;   cells, until the first click
+;; - COUNTDOWN MODE -> the "adjacent bomb count" numbers decrease for each
+;;   adjacent flag (toggle with key `c`)
+;;    -> issues: flood uncover needs to interact with the adjusted counts,
+;;       which means it needs to run when a flag is placed
+;;    -> would be nice if flags weren't on a blue background in this mode
+;;       so that the "count" was clearly tied to the blue backgrounds
 ;; - Redo the drawing system
-
-(local grid-width 19)
-(local grid-height 14)
-
-(local grid {})
-
-(var selected-x 0)
-(var selected-y 0)
-(var game-over? false)
+;; - Build an icell iterator (each [x y cell (icells)])
+;; - Build an ineighbors (each [nx ny cell (ineighbors x y)])
+;; - It'd be cool to have a "flagged bomb" icon to show at the end of the game
+;;   so the player could see how they did
 
 (fn init-grid! []
    (set game-over? false)
@@ -60,7 +90,7 @@
       (for [y 1 grid-height]
          (table.insert possible-flowers {:x x :y y})))
 
-   (for [i 1 40]
+   (for [i 1 bomb-count]
       (let [ndx (love.math.random (# possible-flowers))
             {: x : y} (table.remove possible-flowers ndx)]
          (tset grid y x :flower true))))
@@ -88,8 +118,13 @@
    (when (= key :escape)
       (love.event.quit))
 
+   ;; reset the game
    (when (= key :r)
-      (init-grid!)))
+      (init-grid!))
+
+   ;; toggle countdown mode
+   (when (= key :c)
+      (set countdown-mode? (not countdown-mode?))))
 
 (fn each-neighbor [x y f]
    (for [dx -1 1]
@@ -103,6 +138,8 @@
 (fn surrounding-flowers [x y]
    (var count 0)
    (each-neighbor x y (fn [cell nx ny]
+      (when (and countdown-mode? (= cell.state :flag))
+         (set count (- count 1)))
       (when cell.flower
          (set count (+ count 1)))))
    count)
@@ -117,26 +154,50 @@
                (when (or (= cell.state :covered) (= cell.state :?))
                   (table.insert stack [nx ny]))))))))
 
+;; When marking a flag in countdown-mode any adjacent spaces that have
+;; their visible neighbor count reduced to zero should be flood unfilled.
+(fn flood-uncover-flag [x y]
+   (local stack [])
+
+   (each-neighbor x y (fn [cell nx ny]
+      (when (and (= cell.state :uncovered)
+                 (= (surrounding-flowers nx ny) 0))
+         (flood-uncover nx ny)))))
+
 (local covered-cell-transitions {
    :covered :flag
    :flag :?
    :? :covered
 })
 
+(fn check-game-won []
+   (var done true)
+   (for [y 1 grid-height]
+      (for [x 1 grid-width]
+         (let [cell (. grid y x)]
+            (if (and (not cell.flower) (~= cell.state :uncovered))
+               (set done false)))))
+   done)
+
 (fn love.mousereleased [x y button]
    (when (not game-over?)
       (let [cell (. grid selected-y selected-x)]
 
          (when (= button 1)
-            (if cell.flower (set game-over? true)
-
-               (~= cell.state :flag)
-               (flood-uncover selected-x selected-y)))
+            (if (~= cell.state :flag)
+               (if cell.flower (set game-over? true)
+                  :else
+                  (flood-uncover selected-x selected-y))))
 
          (when (= button 2)
             (let [next (. covered-cell-transitions cell.state)]
-               (if next
-                  (tset grid selected-y selected-x :state next)))))))
+               (when next
+                  (tset grid selected-y selected-x :state next))
+                  (when (and countdown-mode? (= next :flag))
+                     (flood-uncover-flag selected-x selected-y))))))
+
+   (if (check-game-won)
+      (set game-over? true)))
 
 
 (fn love.update []
