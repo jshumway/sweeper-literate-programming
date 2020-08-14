@@ -11,19 +11,11 @@
 (local tile-import-size 40)
 (local tile-draw-size 40)
 
-(local image (love.graphics.newImage "tiles-2.png"))
+(local image (love.graphics.newImage "tiles.png"))
 (local tile-quads [])
 
-;; GAME STATE
-
-(local grid {})
-
-(var selected-x 0)
-(var selected-y 0)
-(var game-over? false)
-(var countdown-mode? true)
-
-
+;; these names correspond to the section of `image` specified by quad at the
+;; index in `tile-quads`
 (local tile-names {
    :covered 1
    :covered-hover 2
@@ -32,7 +24,22 @@
    :flag 5
    :? 6
    :flag-countdown 7
+   :flagged-bomb 8
 })
+
+;; GAME STATE
+
+(local grid {})
+
+(var countdown-mode? true)
+
+(var selected-x 0)
+(var selected-y 0)
+
+;; TODO promote this to game-state w/ values :init, :playing, :win, :lose
+;; and have a fn (game-over?) that is true if state is one of the last two.
+(var game-over? false)
+
 
 (fn tile-for-number [n]
    (. tile-quads (+ n 8)))
@@ -64,11 +71,10 @@
 
 ;; This is the final TODO list, no more items can be added unless they are bugs.
 ;; - Redo the drawing system
-;; - It'd be cool to have a "flagged bomb" icon to show at the end of the game
-;;   so the player could see how they did
 ;; - Really a victory mode in general so you know you've won!
 ;; - Also a counter with remaining unflagged bombs
 ;; - INITIAL BOMB PLACEMENT CANNOT KILL YOU!
+;; - Rename flower to bomb
 
 (fn icells []
    "Iterates over all the points in the grid as (x, y, cell)."
@@ -126,6 +132,7 @@
 
 (fn love.load []
    (load-images!)
+   ;; TODO init-blank-grid, call (init-grid first-guess) later
    (init-grid!))
 
 (fn draw-tiles-atlas []
@@ -165,11 +172,11 @@
                (when (or (= cell.state :covered) (= cell.state :?))
                   (table.insert stack [nx ny])))))))
 
-;; When marking a flag in countdown-mode any adjacent spaces that have
-;; their visible neighbor count reduced to zero should be flood unfilled.
 (fn flood-uncover-flag [x y]
-   (local stack [])
-
+   "Marking a flag in countdown mode causes adjacent spaces that now show
+    a count of 0 to have their neighbors revealed. This could cause the
+    a bomb to be revealed and the player to lose the game if a flag location
+    is placed incorrectly."
    (each [nx ny cell (ineighbors x y)]
       (when (and (= cell.state :uncovered)
                  (= (surrounding-flowers nx ny) 0))
@@ -227,7 +234,8 @@
 
          ;; COVERED => mouse hover -> :covered-hover, else -> :covered
          (= cell.state :covered)
-         (if selected? :covered-hover :else :covered)
+         (if (and selected? (not game-over?)) :covered-hover
+             :else :covered)
 
          ;; FLAG => mouse down -> :covered, else -> :flag
          (= cell.state :flag)
@@ -260,9 +268,12 @@
       (let [cell (. grid y x)]
          (var tile (draw-tile-for-cell x y cell))
 
-         ;; draw all flowers when game is over
+         ;; draw all bombs when game is over
          (when (and game-over? cell.flower)
-            (set tile :flower))
+            (if (= cell.state :flag)
+               (set tile :flagged-bomb)
+               :else
+               (set tile :flower)))
 
          (draw-tile
             tile
