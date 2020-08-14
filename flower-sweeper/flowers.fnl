@@ -21,7 +21,7 @@
 (var selected-x 0)
 (var selected-y 0)
 (var game-over? false)
-(var countdown-mode? false)
+(var countdown-mode? true)
 
 
 (local tile-names {
@@ -54,7 +54,7 @@
       (number? name)
       (set quad (tile-for-number name))
 
-      (and countdown-mode? (= :flag name))
+      (and countdown-mode? (= name :flag))
       (set quad (tile-quad :flag-countdown))
 
       :else
@@ -62,18 +62,38 @@
 
    (love.graphics.draw image quad x y))
 
-;; TODO:
-;; - COUNTDOWN MODE -> the "adjacent bomb count" numbers decrease for each
-;;   adjacent flag (toggle with key `c`)
-;;    -> issues: flood uncover needs to interact with the adjusted counts,
-;;       which means it needs to run when a flag is placed
-;;    -> would be nice if flags weren't on a blue background in this mode
-;;       so that the "count" was clearly tied to the blue backgrounds
+;; This is the final TODO list, no more items can be added unless they are bugs.
 ;; - Redo the drawing system
-;; - Build an icell iterator (each [x y cell (icells)])
-;; - Build an ineighbors (each [nx ny cell (ineighbors x y)])
 ;; - It'd be cool to have a "flagged bomb" icon to show at the end of the game
 ;;   so the player could see how they did
+;; - Really a victory mode in general so you know you've won!
+;; - Also a counter with remaining unflagged bombs
+;; - INITIAL BOMB PLACEMENT CANNOT KILL YOU!
+
+(fn icells []
+   "Iterates over all the points in the grid as (x, y, cell)."
+   (let [co (coroutine.create (fn []
+      (each [y row (ipairs grid)]
+         (each [x cell (ipairs row)]
+            (coroutine.yield x y cell)))))]
+      (fn []
+         (let [(ok x y cell) (coroutine.resume co)]
+            (when ok
+               (values x y cell))))))
+
+(fn ineighbors [x y]
+   "Iterates over all the valid neighbors of point (x, y) as (nx, ny, cell)."
+   (let [co (coroutine.create (fn []
+      (for [dx -1 1]
+         (for [dy -1 1]
+            (when (not (and (= dx 0) (= dy 0)))
+               (let [[nx ny] [(+ x dx) (+ y dy)]
+                     cell (-?> grid (. ny) (. nx))]
+                  (if cell
+                     (coroutine.yield nx ny cell))))))))]
+      (fn []
+         (let [(ok nx ny cell) (coroutine.resume co)]
+            (when ok (values nx ny cell))))))
 
 (fn init-grid! []
    (set game-over? false)
@@ -126,22 +146,13 @@
    (when (= key :c)
       (set countdown-mode? (not countdown-mode?))))
 
-(fn each-neighbor [x y f]
-   (for [dx -1 1]
-      (for [dy -1 1]
-         (when (not (and (= dx 0) (= dy 0)))
-            (let [[nx ny] [(+ x dx) (+ y dy)]
-                  cell (-?> grid (. ny) (. nx))]
-               (if cell
-                  (f cell nx ny)))))))
-
 (fn surrounding-flowers [x y]
    (var count 0)
-   (each-neighbor x y (fn [cell nx ny]
+   (each [nx ny cell (ineighbors x y)]
       (when (and countdown-mode? (= cell.state :flag))
          (set count (- count 1)))
       (when cell.flower
-         (set count (+ count 1)))))
+         (set count (+ count 1))))
    count)
 
 (fn flood-uncover [x y]
@@ -150,19 +161,19 @@
       (let [[x y] (table.remove stack)]
          (tset grid y x :state :uncovered)
          (when (= (surrounding-flowers x y) 0)
-            (each-neighbor x y (fn [cell nx ny]
+            (each [nx ny cell (ineighbors x y)]
                (when (or (= cell.state :covered) (= cell.state :?))
-                  (table.insert stack [nx ny]))))))))
+                  (table.insert stack [nx ny])))))))
 
 ;; When marking a flag in countdown-mode any adjacent spaces that have
 ;; their visible neighbor count reduced to zero should be flood unfilled.
 (fn flood-uncover-flag [x y]
    (local stack [])
 
-   (each-neighbor x y (fn [cell nx ny]
+   (each [nx ny cell (ineighbors x y)]
       (when (and (= cell.state :uncovered)
                  (= (surrounding-flowers nx ny) 0))
-         (flood-uncover nx ny)))))
+         (flood-uncover nx ny))))
 
 (local covered-cell-transitions {
    :covered :flag
@@ -245,16 +256,15 @@
             :uncovered))))
 
 (fn love.draw []
-   (for [y 1 grid-height]
-      (for [x 1 grid-width]
-         (let [cell (. grid y x)]
-            (var tile (draw-tile-for-cell x y cell))
+   (each [x y cell (icells)]
+      (let [cell (. grid y x)]
+         (var tile (draw-tile-for-cell x y cell))
 
-            ;; draw all flowers when game is over
-            (when (and game-over? cell.flower)
-               (set tile :flower))
+         ;; draw all flowers when game is over
+         (when (and game-over? cell.flower)
+            (set tile :flower))
 
-            (draw-tile
-               tile
-               (* (- x 1) tile-draw-size)
-               (* (- y 1) tile-draw-size))))))
+         (draw-tile
+            tile
+            (* (- x 1) tile-draw-size)
+            (* (- y 1) tile-draw-size)))))
