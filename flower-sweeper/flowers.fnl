@@ -70,11 +70,22 @@
    (love.graphics.draw image quad x y))
 
 ;; This is the final TODO list, no more items can be added unless they are bugs.
+;; - Consider improving the graphics of 4 & 5
 ;; - Redo the drawing system
 ;; - Really a victory mode in general so you know you've won!
 ;; - Also a counter with remaining unflagged bombs
 ;; - INITIAL BOMB PLACEMENT CANNOT KILL YOU!
-;; - Rename flower to bomb
+;; - Rename flower to bomb in the code
+;; - Add the font, get the size right, add a "status bar" with:
+;;    [COUNTODWN] (in yellow) when in countodwn mode
+;;    Number of boms remaining
+;;    And a win or lose message
+;; E.g.
+;;  CLICK ANYWHERE TO BEGIN
+;;  [COUNTDOWN MODE] 40 BOMBS REMAIN
+;;  [NORMAL MODE] 08 BOMBS REMAIN
+;;  CONGRATULATIONS, YOU WON!
+;;  32 (8 FLAGGED DISARMED) BOMBS EXPLODE! CLICK ANYWHERE TO START AGAIN.
 
 (fn icells []
    "Iterates over all the points in the grid as (x, y, cell)."
