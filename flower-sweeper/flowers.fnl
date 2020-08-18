@@ -11,6 +11,8 @@
 (local tile-import-size 40)
 (local tile-draw-size 40)
 
+(local font (love.graphics.newFont "lilliput-steps.ttf" 28))
+
 (local image (love.graphics.newImage "tiles.png"))
 (local tile-quads [])
 
@@ -228,13 +230,34 @@
    (if (check-game-won)
       (set game-over? true)))
 
-
 (fn love.update []
    (let [(x y) (love.mouse.getPosition)]
       (set selected-x (math.min grid-width
          (math.floor (+ 1 (/ x tile-draw-size)))))
       (set selected-y (math.min grid-height
          (math.floor (+ 1 (/ y tile-draw-size)))))))
+
+(fn count-flags []
+   (var count 0)
+   (each [_ _ cell (icells)]
+      (if (= cell.state :flag)
+         (set count (+ count 1))))
+   count)
+
+(fn draw-status-bar []
+   (var line "")
+
+   ;; 20 FLAGS / 40 BOMBS                  [COUNTDOWN]
+   ;;
+
+   (if countdown-mode?
+      (set line (.. line "[COUNTDOWN] "))
+      :else
+      (set line (.. line "[NORMAL] ")))
+
+   (set line (.. line (count-flags) " FLAGS / " bomb-count " BOMBS"))
+
+   (love.graphics.print line 0 557))
 
 (fn draw-tile-for-cell [x y cell]
    (let [selected? (and (= x selected-x) (= y selected-y))
@@ -275,6 +298,8 @@
             :uncovered))))
 
 (fn love.draw []
+   (love.graphics.setFont font)
+
    (each [x y cell (icells)]
       (let [cell (. grid y x)]
          (var tile (draw-tile-for-cell x y cell))
@@ -289,4 +314,6 @@
          (draw-tile
             tile
             (* (- x 1) tile-draw-size)
-            (* (- y 1) tile-draw-size)))))
+            (* (- y 1) tile-draw-size))))
+
+   (draw-status-bar))
