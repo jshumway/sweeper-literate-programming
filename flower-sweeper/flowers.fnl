@@ -38,9 +38,15 @@
 (var selected-x 0)
 (var selected-y 0)
 
-;; TODO promote this to game-state w/ values :init, :playing, :win, :lose
-;; and have a fn (game-over?) that is true if state is one of the last two.
-(var game-over? false)
+;; game states:
+;; :init - board is empty awaiting first click
+;; :play - bombs have been placed, player is revealing tiles
+;; :lost - a bomb was revealed
+;; :won  - all non-bomb tiles have been revealed
+(var game-state :init)
+
+(fn game-over? []
+   (or (= game-state :won) (= game-state :lost)))
 
 
 (fn tile-for-number [n]
@@ -73,21 +79,9 @@
 
 ;; This is the final TODO list, no more items can be added unless they are bugs.
 ;; - Consider improving the graphics of 4 & 5
+;; - Move the flag part of the flagged bomb image higher
 ;; - Redo the drawing system
-;; - Really a victory mode in general so you know you've won!
-;; - Also a counter with remaining unflagged bombs
-;; - INITIAL BOMB PLACEMENT CANNOT KILL YOU!
 ;; - Rename flower to bomb in the code
-;; - Add the font, get the size right, add a "status bar" with:
-;;    [COUNTODWN] (in yellow) when in countodwn mode
-;;    Number of boms remaining
-;;    And a win or lose message
-;; E.g.
-;;  CLICK ANYWHERE TO BEGIN
-;;  [COUNTDOWN MODE] 40 BOMBS REMAIN
-;;  [NORMAL MODE] 08 BOMBS REMAIN
-;;  CONGRATULATIONS, YOU WON!
-;;  32 (8 FLAGGED DISARMED) BOMBS EXPLODE! CLICK ANYWHERE TO START AGAIN.
 
 (fn icells []
    "Iterates over all the points in the grid as (x, y, cell)."
@@ -114,26 +108,6 @@
          (let [(ok nx ny cell) (coroutine.resume co)]
             (when ok (values nx ny cell))))))
 
-(fn init-grid! []
-   (set game-over? false)
-
-   ;; prepare blank grid
-   (for [y 1 grid-height]
-      (tset grid y {})
-      (for [x 1 grid-width]
-         (tset grid y x {:flower false :state :covered})))
-
-   ;; place flowers at random locations
-   (var possible-flowers [])
-   (for [x 1 grid-width]
-      (for [y 1 grid-height]
-         (table.insert possible-flowers {:x x :y y})))
-
-   (for [i 1 bomb-count]
-      (let [ndx (love.math.random (# possible-flowers))
-            {: x : y} (table.remove possible-flowers ndx)]
-         (tset grid y x :flower true))))
-
 (fn load-images! []
    (for [i 0 15]
       (let [[w h] [tile-import-size tile-import-size]
@@ -143,15 +117,32 @@
             quad (love.graphics.newQuad x y w h (image:getDimensions))]
          (table.insert tile-quads quad))))
 
+(fn init-game! []
+   (set game-state :init)
+
+   ;; prepare blank grid
+   (for [y 1 grid-height]
+      (tset grid y {})
+      (for [x 1 grid-width]
+         (tset grid y x {:flower false :state :covered}))))
+
+(fn place-bombs! [player-x player-y]
+   "Fill the grid with hidden bombs while avoiding the space [player-x player-y]"
+   (set game-state :play)
+   (var possible-flowers [])
+   (for [x 1 grid-width]
+      (for [y 1 grid-height]
+         (when (and (~= x player-x) (~= y player-y))
+            (table.insert possible-flowers {:x x :y y}))))
+
+   (for [i 1 bomb-count]
+      (let [ndx (love.math.random (# possible-flowers))
+            {: x : y} (table.remove possible-flowers ndx)]
+         (tset grid y x :flower true))))
+
 (fn love.load []
    (load-images!)
-   ;; TODO init-blank-grid, call (init-grid first-guess) later
-   (init-grid!))
-
-(fn draw-tiles-atlas []
-   (let [padding 22]
-      (each [i quad (ipairs tile-quads)]
-         (love.graphics.draw image quad (* padding (- i 1)) 0))))
+   (init-game!))
 
 (fn love.keypressed [key]
    ;; quit the game
@@ -160,7 +151,7 @@
 
    ;; reset the game
    (when (= key :r)
-      (init-grid!))
+      (init-game!))
 
    ;; toggle countdown mode
    (when (= key :c)
@@ -201,22 +192,43 @@
    :? :covered
 })
 
-(fn check-game-won []
-   (var done true)
-   (for [y 1 grid-height]
-      (for [x 1 grid-width]
-         (let [cell (. grid y x)]
-            (if (and (not cell.flower) (~= cell.state :uncovered))
-               (set done false)))))
-   done)
+
+(fn check-game-over! []
+   "Check for a game over condition and potentially update the game state.
+    The game is won when all non-bomb cells have been uncovered. The game is
+    lost when a bomb cell has been uncovered."
+
+   (var all-empty-spaces-uncovered true)
+   (var all-bombs-covered true)
+
+   (each [x y cell (icells)]
+      ;; if there is a covered non-bomb cell the game has not been won
+      ;; if there is an uncovered bomb cell the game has been lost
+      (if (and cell.flower (= cell.state :uncovered))
+         (set all-bombs-covered false)
+
+         (and (not cell.flower) (= cell.state :covered))
+         (set all-empty-spaces-uncovered false)))
+
+   (if (not all-bombs-covered)
+      (set game-state :lost)
+
+      all-empty-spaces-uncovered
+      (set game-state :won)))
 
 (fn love.mousereleased [x y button]
-   (when (not game-over?)
+   (when (= game-state :init)
+      (when (= button 1)
+         (place-bombs! selected-x selected-y)
+         (flood-uncover selected-x selected-y)))
+
+   (when (= game-state :play)
       (let [cell (. grid selected-y selected-x)]
 
          (when (= button 1)
             (if (~= cell.state :flag)
-               (if cell.flower (set game-over? true)
+               (if cell.flower
+                  (set cell.state :uncovered)
                   :else
                   (flood-uncover selected-x selected-y))))
 
@@ -227,8 +239,7 @@
                   (when (and countdown-mode? (= next :flag))
                      (flood-uncover-flag selected-x selected-y))))))
 
-   (if (check-game-won)
-      (set game-over? true)))
+   (check-game-over!))
 
 (fn love.update []
    (let [(x y) (love.mouse.getPosition)]
@@ -237,27 +248,48 @@
       (set selected-y (math.min grid-height
          (math.floor (+ 1 (/ y tile-draw-size)))))))
 
+;; TODO make a count-cells routine that takes a predicate, e.g.:
+;; (count-cells #(= $.state :flag))
 (fn count-flags []
    (var count 0)
    (each [_ _ cell (icells)]
-      (if (= cell.state :flag)
+      (when (= cell.state :flag)
+         (set count (+ count 1))))
+   count)
+
+(fn count-unflagged-bombs []
+   (var count 0)
+   (each [_ _ cell (icells)]
+      (when (and cell.flower (~= cell.state :flag))
          (set count (+ count 1))))
    count)
 
 (fn draw-status-bar []
    (var line "")
 
-   ;; 20 FLAGS / 40 BOMBS                  [COUNTDOWN]
-   ;;
+   (when (= game-state :init)
+      (set line "LEFT CLICK ANY TILE TO BEGIN..."))
 
-   (if countdown-mode?
-      (set line (.. line "[COUNTDOWN] "))
-      :else
-      (set line (.. line "[NORMAL] ")))
+   (when (= game-state :play)
+      (if countdown-mode?
+         (set line (.. line "[COUNTDOWN] "))
+         :else
+         (set line (.. line "[NORMAL] ")))
 
-   (set line (.. line (count-flags) " FLAGS / " bomb-count " BOMBS"))
+      (set line (.. line (count-flags) " FLAGS / " bomb-count " BOMBS")))
 
-   (love.graphics.print line 0 557))
+   ;; LINE WIDTH IS 38 CHARACTERS D:
+   ;; --------------------------------------
+   ;; VICTORY, ALL BOMBS DISARMED! [R]ESTART
+   ;; DEFEAT! 20 BOMBS EXPLODE. [R]ESTART
+
+   (when (= game-state :lost)
+      (set line (.."DEFEAT! " (count-unflagged-bombs) " BOMBS EXPLODE. [R]ESTART")))
+
+   (when (= game-state :won)
+      (set line "VICTORY! ALL BOMBS DISARMED! [R]ESTART"))
+
+   (love.graphics.print line 6 557))
 
 (fn draw-tile-for-cell [x y cell]
    (let [selected? (and (= x selected-x) (= y selected-y))
@@ -268,7 +300,7 @@
 
          ;; COVERED => mouse hover -> :covered-hover, else -> :covered
          (= cell.state :covered)
-         (if (and selected? (not game-over?)) :covered-hover
+         (if (and selected? (not (game-over?))) :covered-hover
              :else :covered)
 
          ;; FLAG => mouse down -> :covered, else -> :flag
@@ -305,7 +337,7 @@
          (var tile (draw-tile-for-cell x y cell))
 
          ;; draw all bombs when game is over
-         (when (and game-over? cell.flower)
+         (when (and (game-over?) cell.flower)
             (if (= cell.state :flag)
                (set tile :flagged-bomb)
                :else
