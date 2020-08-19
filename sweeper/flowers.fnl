@@ -78,6 +78,7 @@
 })
 
 ;; Now we can load the game in its initial state!
+
 (fn love.load []
    (load-images!)
    (init-game!))
@@ -129,6 +130,7 @@
 ;; by first constructing a list of all possible locations, excluding the initial
 ;; selection. Then we remove random elements from the list and place bombs at
 ;; those locations.
+
 (fn place-bombs! [player-x player-y]
    "Fill the grid with hidden bombs while avoiding the space [player-x player-y]"
 
@@ -142,8 +144,43 @@
             [x y] (table.remove possible-locations ndx)]
          (tset grid y x :bomb true))))
 
+;; Next we want to track where the player's mouse is pointing in terms of
+;; cells in the grid. We create state to track the x and y coordinate of the
+;; cell and update them each frame in love.update. All other updates are tied
+;; to keypresses and mouseclicks, which will be handled in their respective
+;; callbacks later.
+
+(var selected-x 0)
+(var selected-y 0)
+
+(fn love.update []
+   (let [(x y) (love.mouse.getPosition)]
+      (set selected-x
+         (math.min grid-width (math.floor (+ 1 (/ x tile-size)))))
+      (set selected-y
+         (math.min grid-height (math.floor (+ 1 (/ y tile-size)))))))
+
+;; Before we get to drawing the board we need one more piece of game state.
+;; Countdown Mode is an alternative display mode. You can think if it this way:
+;; instead of displaying in uncovered cells the number of adjacent bombs, you
+;; display the number of adjacent bombs that have not yet been flagged. The
+;; thinking goes that, if the player has accounted for an adjacent bomb by
+;; flagging it then the adjacency counts can ignore it.
+;;
+;; In addition to changing the drawing logic, countdown mode also changes how
+;; placing flags works, but we'll discuss that when we get there.
+;;
+;; By default, we'll start in countdown mode, becaues it is the one I happen
+;; to prefer :D
+
+(var countdown-mode? true)
 
 
+
+
+
+;; Which would I prefer to discuss first? Drawing the full board, or doing the
+;; game logic updates?
 
 
 
@@ -161,10 +198,11 @@
 
 ;; GAME STATE
 
-(var countdown-mode? true)
-
-(var selected-x 0)
-(var selected-y 0)
+;; What relies on countdown-mode?
+;; keypressed -> deciding what to do in countdown-mode?
+;; drawing cells -> if there is a flag in countodwn mode
+;; drawing cells -> adjacent count
+;; counting surrounding bombs
 
 
 (fn tile-for-number [n]
@@ -303,13 +341,6 @@
                      (flood-uncover-flag selected-x selected-y))))))
 
    (check-game-over!))
-
-(fn love.update []
-   (let [(x y) (love.mouse.getPosition)]
-      (set selected-x (math.min grid-width
-         (math.floor (+ 1 (/ x tile-size)))))
-      (set selected-y (math.min grid-height
-         (math.floor (+ 1 (/ y tile-size)))))))
 
 (fn count-cells [pred]
    (var c 0)
