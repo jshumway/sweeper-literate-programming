@@ -48,12 +48,11 @@
 (local tile-quads [])
 
 ;; TODO simplify this
-(local tile-import-size 40)
-(local tile-draw-size 40)
+(local tile-size 40)
 
 (fn load-images! []
    (for [i 0 15]
-      (let [[w h] [tile-import-size tile-import-size]
+      (let [[w h] [tile-size tile-size]
             row (math.floor (/ i 8))
             col (% i 8)
             [x y] [(* col w) (* row h)]
@@ -266,9 +265,9 @@
 (fn love.update []
    (let [(x y) (love.mouse.getPosition)]
       (set selected-x (math.min grid-width
-         (math.floor (+ 1 (/ x tile-draw-size)))))
+         (math.floor (+ 1 (/ x tile-size)))))
       (set selected-y (math.min grid-height
-         (math.floor (+ 1 (/ y tile-draw-size)))))))
+         (math.floor (+ 1 (/ y tile-size)))))))
 
 ;; TODO make a count-cells routine that takes a predicate, e.g.:
 ;; (count-cells #(= $.state :flag))
@@ -367,7 +366,7 @@
 
          (draw-tile
             tile
-            (* (- x 1) tile-draw-size)
-            (* (- y 1) tile-draw-size))))
+            (* (- x 1) tile-size)
+            (* (- y 1) tile-size))))
 
    (draw-status-bar))
