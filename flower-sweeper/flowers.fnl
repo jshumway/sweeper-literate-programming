@@ -22,7 +22,7 @@
    :covered 1
    :covered-hover 2
    :uncovered 3
-   :flower 4
+   :bomb 4
    :flag 5
    :? 6
    :flag-countdown 7
@@ -58,10 +58,6 @@
 (fn number? [arg]
    (= (type arg) :number))
 
-;; TODO this is kind of gross
-;; actually the whole flower drawing system is kinda gross
-;; TODO this could be further improved by returning the quad and
-;; letting another function draw
 (fn draw-tile [name x y]
    (var quad nil)
 
@@ -81,7 +77,6 @@
 ;; - Consider improving the graphics of 4 & 5
 ;; - Move the flag part of the flagged bomb image higher
 ;; - Redo the drawing system
-;; - Rename flower to bomb in the code
 
 (fn icells []
    "Iterates over all the points in the grid as (x, y, cell)."
@@ -124,21 +119,21 @@
    (for [y 1 grid-height]
       (tset grid y {})
       (for [x 1 grid-width]
-         (tset grid y x {:flower false :state :covered}))))
+         (tset grid y x {:bomb false :state :covered}))))
 
 (fn place-bombs! [player-x player-y]
    "Fill the grid with hidden bombs while avoiding the space [player-x player-y]"
    (set game-state :play)
-   (var possible-flowers [])
+   (var possible-bombs [])
    (for [x 1 grid-width]
       (for [y 1 grid-height]
          (when (and (~= x player-x) (~= y player-y))
-            (table.insert possible-flowers {:x x :y y}))))
+            (table.insert possible-bombs {:x x :y y}))))
 
    (for [i 1 bomb-count]
-      (let [ndx (love.math.random (# possible-flowers))
-            {: x : y} (table.remove possible-flowers ndx)]
-         (tset grid y x :flower true))))
+      (let [ndx (love.math.random (# possible-bombs))
+            {: x : y} (table.remove possible-bombs ndx)]
+         (tset grid y x :bomb true))))
 
 (fn love.load []
    (load-images!)
@@ -157,12 +152,12 @@
    (when (= key :c)
       (set countdown-mode? (not countdown-mode?))))
 
-(fn surrounding-flowers [x y]
+(fn surrounding-bombs [x y]
    (var count 0)
    (each [nx ny cell (ineighbors x y)]
       (when (and countdown-mode? (= cell.state :flag))
          (set count (- count 1)))
-      (when cell.flower
+      (when cell.bomb
          (set count (+ count 1))))
    count)
 
@@ -171,7 +166,7 @@
    (while (> (# stack) 0)
       (let [[x y] (table.remove stack)]
          (tset grid y x :state :uncovered)
-         (when (= (surrounding-flowers x y) 0)
+         (when (= (surrounding-bombs x y) 0)
             (each [nx ny cell (ineighbors x y)]
                (when (or (= cell.state :covered) (= cell.state :?))
                   (table.insert stack [nx ny])))))))
@@ -183,7 +178,7 @@
     is placed incorrectly."
    (each [nx ny cell (ineighbors x y)]
       (when (and (= cell.state :uncovered)
-                 (= (surrounding-flowers nx ny) 0))
+                 (= (surrounding-bombs nx ny) 0))
          (flood-uncover nx ny))))
 
 (local covered-cell-transitions {
@@ -204,10 +199,10 @@
    (each [x y cell (icells)]
       ;; if there is a covered non-bomb cell the game has not been won
       ;; if there is an uncovered bomb cell the game has been lost
-      (if (and cell.flower (= cell.state :uncovered))
+      (if (and cell.bomb (= cell.state :uncovered))
          (set all-bombs-covered false)
 
-         (and (not cell.flower) (= cell.state :covered))
+         (and (not cell.bomb) (= cell.state :covered))
          (set all-empty-spaces-uncovered false)))
 
    (if (not all-bombs-covered)
@@ -227,7 +222,7 @@
 
          (when (= button 1)
             (if (~= cell.state :flag)
-               (if cell.flower
+               (if cell.bomb
                   (set cell.state :uncovered)
                   :else
                   (flood-uncover selected-x selected-y))))
@@ -260,7 +255,7 @@
 (fn count-unflagged-bombs []
    (var count 0)
    (each [_ _ cell (icells)]
-      (when (and cell.flower (~= cell.state :flag))
+      (when (and cell.bomb (~= cell.state :flag))
          (set count (+ count 1))))
    count)
 
@@ -294,7 +289,7 @@
 (fn draw-tile-for-cell [x y cell]
    (let [selected? (and (= x selected-x) (= y selected-y))
          clicking? (love.mouse.isDown 1)
-         adjacent-flowers (surrounding-flowers x y)]
+         adjacent-bombs (surrounding-bombs x y)]
 
       (if
 
@@ -318,14 +313,14 @@
             :?)
 
          ;; UNCOVERED =>
-         ;;    flower? -> :flower
+         ;;    bomb? -> :bomb
          ;;    adjacent bombs? -> count
          ;;    else -> :uncovered
          (= cell.state :uncovered)
-         (if cell.flower
-            :flower
-            (> adjacent-flowers 0)
-            adjacent-flowers
+         (if cell.bomb
+            :bomb
+            (> adjacent-bombs 0)
+            adjacent-bombs
             :else
             :uncovered))))
 
@@ -337,11 +332,11 @@
          (var tile (draw-tile-for-cell x y cell))
 
          ;; draw all bombs when game is over
-         (when (and (game-over?) cell.flower)
+         (when (and (game-over?) cell.bomb)
             (if (= cell.state :flag)
                (set tile :flagged-bomb)
                :else
-               (set tile :flower)))
+               (set tile :bomb)))
 
          (draw-tile
             tile
