@@ -1,20 +1,80 @@
-;; GAME PARAMS
+;; For literate programming, we want to rearrange the program to introduce
+;; concepts in the best order for the reader.
 
 (local grid-width 19)
 (local grid-height 14)
 
-(local bomb-count 40)
+;; The grid will be a 2d array. Each cell will store if it has a bomb at the
+;; current location, and if it has been revealed. Cells that have not been
+;; revealed can be in the normal :covered state, marked with a :flag, or a :?.
+;; All cells are initially placed without a bomb and covered.
 
-;; APP STATE
+(local grid {})
+
+;; Bombs won't be placed until after the player has first clicked on a space,
+;; to ensure the player cannot lose on their first turn.
+(fn reset-grid! []
+   (for [y 1 grid-height]
+      (tset grid y {})
+      (for [x 1 grid-width]
+         (tset grid y x {:bomb false :state :covered}))))
+
+;; The game can be in one of four states:
+;;  * :init - the grid is blank and unrevealed, bombs have not yet been placed
+;;  * :play - at least one cell has been revealed, bombs have been placed, and
+;;            the player has neither won nor lost yet
+;;  * :lost - a bomb tile was revealed so the player has lost
+;;  * :won  - all non-bomb tiles have been uncovered so the player has won
+(var game-state :init)
+
+;; A helper function to determine if the game is in a terminal state.
+(fn game-over? []
+   (or (= game-state :won) (= game-state :lost)))
+
+;; This brings us to the end of the logical side of initialization.  When
+;; starting up or restarting the game we reset the state and reset the grid to
+;; entirely blank.
+(fn init-game! []
+   (set game-state :init)
+   (reset-grid!))
+
+;; However there is more to be done to load the game. We need to load our small
+;; image atlas and setup some graphics state to easily draw the different images.
+
+;; First we load the image itself. The image was created in a pixel editor with
+;; each tile a 10x10 square, then exported at 400% resolution.
+(local image (love.graphics.newImage "tiles.png"))
+
+(local tile-quads [])
 
 ;; TODO simplify this
 (local tile-import-size 40)
 (local tile-draw-size 40)
 
-(local font (love.graphics.newFont "lilliput-steps.ttf" 28))
+(fn load-images! []
+   (for [i 0 15]
+      (let [[w h] [tile-import-size tile-import-size]
+            row (math.floor (/ i 8))
+            col (% i 8)
+            [x y] [(* col w) (* row h)]
+            quad (love.graphics.newQuad x y w h (image:getDimensions))]
+         (table.insert tile-quads quad))))
 
-(local image (love.graphics.newImage "tiles.png"))
-(local tile-quads [])
+(fn love.load []
+   (load-images!)
+   (init-game!))
+
+
+;; MAYBE DRAWING THE BASIC GRID? THAT FEELS LIKE IT SHOULD COME LATER.
+
+
+;; GAME PARAMS
+
+(local bomb-count 40)
+
+;; APP STATE
+
+(local font (love.graphics.newFont "lilliput-steps.ttf" 28))
 
 ;; these names correspond to the section of `image` specified by quad at the
 ;; index in `tile-quads`
@@ -31,22 +91,10 @@
 
 ;; GAME STATE
 
-(local grid {})
-
 (var countdown-mode? true)
 
 (var selected-x 0)
 (var selected-y 0)
-
-;; game states:
-;; :init - board is empty awaiting first click
-;; :play - bombs have been placed, player is revealing tiles
-;; :lost - a bomb was revealed
-;; :won  - all non-bomb tiles have been revealed
-(var game-state :init)
-
-(fn game-over? []
-   (or (= game-state :won) (= game-state :lost)))
 
 
 (fn tile-for-number [n]
@@ -103,23 +151,6 @@
          (let [(ok nx ny cell) (coroutine.resume co)]
             (when ok (values nx ny cell))))))
 
-(fn load-images! []
-   (for [i 0 15]
-      (let [[w h] [tile-import-size tile-import-size]
-            row (math.floor (/ i 8))
-            col (% i 8)
-            [x y] [(* col w) (* row h)]
-            quad (love.graphics.newQuad x y w h (image:getDimensions))]
-         (table.insert tile-quads quad))))
-
-(fn init-game! []
-   (set game-state :init)
-
-   ;; prepare blank grid
-   (for [y 1 grid-height]
-      (tset grid y {})
-      (for [x 1 grid-width]
-         (tset grid y x {:bomb false :state :covered}))))
 
 (fn place-bombs! [player-x player-y]
    "Fill the grid with hidden bombs while avoiding the space [player-x player-y]"
@@ -134,10 +165,6 @@
       (let [ndx (love.math.random (# possible-bombs))
             {: x : y} (table.remove possible-bombs ndx)]
          (tset grid y x :bomb true))))
-
-(fn love.load []
-   (load-images!)
-   (init-game!))
 
 (fn love.keypressed [key]
    ;; quit the game
