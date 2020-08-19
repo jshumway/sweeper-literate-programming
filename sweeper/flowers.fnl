@@ -41,42 +41,31 @@
 ;; However there is more to be done to load the game. We need to load our small
 ;; image atlas and setup some graphics state to easily draw the different images.
 
-;; First we load the image itself. The image was created in a pixel editor with
-;; each tile a 10x10 square, then exported at 400% resolution.
+;; First we load the image itself.
 (local image (love.graphics.newImage "tiles.png"))
 
-(local tile-quads [])
-
-;; TODO simplify this
+;; The image was created in a pixel editor with each tile a 10x10 square,
+;; then exported at 400% resolution. Thus each tile is 40x40.
 (local tile-size 40)
 
+;; Love2d (and many other graphics systems) have tho concept of a quad, which
+;; is a rectangular region in an image that can be quickly drawn. We'll create
+;; a quad for all 16 images in tiles.png.
+(local tile-quads [])
+
+;; Unpack the image into quads. We know there are 2 rows of 8 columns. We want
+;; to ensure that we insert the entire first row into `tile-quads` first,
+;; followed by the entire second row, so the iteration is row-major.
 (fn load-images! []
-   (for [i 0 15]
-      (let [[w h] [tile-size tile-size]
-            row (math.floor (/ i 8))
-            col (% i 8)
-            [x y] [(* col w) (* row h)]
-            quad (love.graphics.newQuad x y w h (image:getDimensions))]
-         (table.insert tile-quads quad))))
+   (for [row 0 1]
+      (for [col 0 7]
+         (let [[x y] [(* col tile-size) (* row tile-size)]
+               quad (love.graphics.newQuad x y tile-size tile-size (image:getDimensions))]
+            (table.insert tile-quads quad)))))
 
-(fn love.load []
-   (load-images!)
-   (init-game!))
-
-
-;; MAYBE DRAWING THE BASIC GRID? THAT FEELS LIKE IT SHOULD COME LATER.
-
-
-;; GAME PARAMS
-
-(local bomb-count 40)
-
-;; APP STATE
-
-(local font (love.graphics.newFont "lilliput-steps.ttf" 28))
-
-;; these names correspond to the section of `image` specified by quad at the
-;; index in `tile-quads`
+;; This map gives symbol names to the quads that we've extracted. The 8 tiles
+;; in the top row of the image have meaningful names, the second row is just
+;; the numbers 1 to 8, which can be specified as numbers instead of symbols.
 (local tile-names {
    :covered 1
    :covered-hover 2
@@ -87,6 +76,88 @@
    :flag-countdown 7
    :flagged-bomb 8
 })
+
+;; Now we can load the game in its initial state!
+(fn love.load []
+   (load-images!)
+   (init-game!))
+
+;; Before moving on to bomb placements, we're going to build a helpful utility
+;; function that allows us to easily iterate through every cell in the grid.
+;; We'd like to take code like this:
+;;
+;; (for [y row (ipairs grid)]
+;;    (for [x cell (ipairs row)]
+;;       ... do something with x, y, and cell...))
+;;
+;; And instead be able to write:
+;;
+;; (for [x y cell (icells)]
+;;    ... do something with x, y, and cell...)
+;;
+;; Not only is it cleaner, but it is decoupled from the implementation details
+;; of grid. Now the user of `icells` doesn't need to know that grid is a column-
+;; major 2d array.
+;;
+;; In another language like Java we'd need to "unpack" the iteration, maintaining
+;; the state needed to "resume" iteration each time the iterator is asked for
+;; the next element. Luckily Lua provides coroutines, allowing us to write code
+;; just like above, just needing some extra book keeping. See the appendix for
+;; a non-coroutine alternative version.
+
+;; TODO honestly just link to and quote the docs:
+;; "Actually, coroutines provide a powerful tool for this task. Again, the key
+;; feature is their ability to turn upside-down the relationship between caller
+;; and callee. With this feature, we can write iterators without worrying about
+;; how to keep state between successive calls to the iterator."
+;; https://www.lua.org/pil/9.3.html
+
+(fn icells []
+   "Iterates over all the points in the grid as (x, y, cell)."
+   (coroutine.wrap (fn []
+      (each [y row (ipairs grid)]
+         (each [x cell (ipairs row)]
+            (coroutine.yield x y cell))))))
+
+;; Bombs will be placed when the player selects the first cell to reveal. This
+;; ensures that the first selected cell will never contain a bomb, and that all
+;; bombs will be placed with equal random chance.
+
+(local bomb-count 40)
+
+;; Given the location of the player's first selection, we place bombs randomly
+;; by first constructing a list of all possible locations, excluding the initial
+;; selection. Then we remove random elements from the list and place bombs at
+;; those locations.
+(fn place-bombs! [player-x player-y]
+   "Fill the grid with hidden bombs while avoiding the space [player-x player-y]"
+
+   (var possible-locations [])
+   (each [x y _ (icells)]
+      (when (or (~= x player-x) (~= y player-y))
+         (table.insert possible-locations [x y])))
+
+   (for [i 1 bomb-count]
+      (let [ndx (love.math.random (length possible-locations))
+            [x y] (table.remove possible-locations ndx)]
+         (tset grid y x :bomb true))))
+
+
+
+
+
+
+
+
+;; MAYBE DRAWING THE BASIC GRID? THAT FEELS LIKE IT SHOULD COME LATER.
+
+
+;; GAME PARAMS
+
+;; APP STATE
+
+(local font (love.graphics.newFont "lilliput-steps.ttf" 28))
+
 
 ;; GAME STATE
 
@@ -125,45 +196,15 @@
 ;; - Move the flag part of the flagged bomb image higher
 ;; - Redo the drawing system
 
-(fn icells []
-   "Iterates over all the points in the grid as (x, y, cell)."
-   (let [co (coroutine.create (fn []
-      (each [y row (ipairs grid)]
-         (each [x cell (ipairs row)]
-            (coroutine.yield x y cell)))))]
-      (fn []
-         (let [(ok x y cell) (coroutine.resume co)]
-            (when ok
-               (values x y cell))))))
-
 (fn ineighbors [x y]
    "Iterates over all the valid neighbors of point (x, y) as (nx, ny, cell)."
-   (let [co (coroutine.create (fn []
+   (coroutine.wrap (fn []
       (for [dx -1 1]
          (for [dy -1 1]
-            (when (not (and (= dx 0) (= dy 0)))
+            (when (or (~= dx 0) (~= dy 0))
                (let [[nx ny] [(+ x dx) (+ y dy)]
                      cell (-?> grid (. ny) (. nx))]
-                  (if cell
-                     (coroutine.yield nx ny cell))))))))]
-      (fn []
-         (let [(ok nx ny cell) (coroutine.resume co)]
-            (when ok (values nx ny cell))))))
-
-
-(fn place-bombs! [player-x player-y]
-   "Fill the grid with hidden bombs while avoiding the space [player-x player-y]"
-   (set game-state :play)
-   (var possible-bombs [])
-   (for [x 1 grid-width]
-      (for [y 1 grid-height]
-         (when (and (~= x player-x) (~= y player-y))
-            (table.insert possible-bombs {:x x :y y}))))
-
-   (for [i 1 bomb-count]
-      (let [ndx (love.math.random (# possible-bombs))
-            {: x : y} (table.remove possible-bombs ndx)]
-         (tset grid y x :bomb true))))
+                  (if cell (coroutine.yield nx ny cell)))))))))
 
 (fn love.keypressed [key]
    ;; quit the game
@@ -240,6 +281,7 @@
 (fn love.mousereleased [x y button]
    (when (= game-state :init)
       (when (= button 1)
+         (set game-state :play)
          (place-bombs! selected-x selected-y)
          (flood-uncover selected-x selected-y)))
 
@@ -269,48 +311,28 @@
       (set selected-y (math.min grid-height
          (math.floor (+ 1 (/ y tile-size)))))))
 
-;; TODO make a count-cells routine that takes a predicate, e.g.:
-;; (count-cells #(= $.state :flag))
-(fn count-flags []
-   (var count 0)
+(fn count-cells [pred]
+   (var c 0)
    (each [_ _ cell (icells)]
-      (when (= cell.state :flag)
-         (set count (+ count 1))))
-   count)
+      (if (pred cell) (set c (+ c 1))))
+   c)
 
-(fn count-unflagged-bombs []
-   (var count 0)
-   (each [_ _ cell (icells)]
-      (when (and cell.bomb (~= cell.state :flag))
-         (set count (+ count 1))))
-   count)
+(fn get-status-line []
+   (match game-state
+      :init
+      "LEFT CLICK ANY TILE TO BEGIN..."
 
-(fn draw-status-bar []
-   (var line "")
+      :play
+      (let [mode (if countdown-mode? "[countdown]" :else "[normal]")
+            flags (count-cells #(= $.state :flag))]
+         (.. mode " " flags " FLAGS / " bomb-count " BOMBS"))
 
-   (when (= game-state :init)
-      (set line "LEFT CLICK ANY TILE TO BEGIN..."))
+      :lost
+      (let [unflagged-bombs (count-cells #(and $.bomb (~= $.state :flag)))]
+         (.. "DEFEAT! " unflagged-bombs " BOMBS EXPLODE. [R]ESTART"))
 
-   (when (= game-state :play)
-      (if countdown-mode?
-         (set line (.. line "[COUNTDOWN] "))
-         :else
-         (set line (.. line "[NORMAL] ")))
-
-      (set line (.. line (count-flags) " FLAGS / " bomb-count " BOMBS")))
-
-   ;; LINE WIDTH IS 38 CHARACTERS D:
-   ;; --------------------------------------
-   ;; VICTORY, ALL BOMBS DISARMED! [R]ESTART
-   ;; DEFEAT! 20 BOMBS EXPLODE. [R]ESTART
-
-   (when (= game-state :lost)
-      (set line (.."DEFEAT! " (count-unflagged-bombs) " BOMBS EXPLODE. [R]ESTART")))
-
-   (when (= game-state :won)
-      (set line "VICTORY! ALL BOMBS DISARMED! [R]ESTART"))
-
-   (love.graphics.print line 6 557))
+      :won
+      "VICTORY! ALL BOMBS DISARMED! [R]ESTART"))
 
 (fn draw-tile-for-cell [x y cell]
    (let [selected? (and (= x selected-x) (= y selected-y))
@@ -350,6 +372,12 @@
             :else
             :uncovered))))
 
+;; it might be worth breaking these back up into independent draw routines
+;; so they can be explained in their proper sections, instead of way here at
+;; the end.
+;;
+;; the LP thing is definitely causing things to get grouped together
+;; conceptually, which is interesting.
 (fn love.draw []
    (love.graphics.setFont font)
 
@@ -369,4 +397,5 @@
             (* (- x 1) tile-size)
             (* (- y 1) tile-size))))
 
-   (draw-status-bar))
+   ;; Draw the status line
+   (love.graphics.print (get-status-line) 6 557))
