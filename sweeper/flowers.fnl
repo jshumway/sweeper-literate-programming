@@ -66,16 +66,24 @@
 ;; This map gives symbol names to the quads that we've extracted. The 8 tiles
 ;; in the top row of the image have meaningful names, the second row is just
 ;; the numbers 1 to 8, which can be specified as numbers instead of symbols.
-(local tile-names {
+(local tile-for-name {
    :covered 1
    :covered-hover 2
-   :uncovered 3
+   :empty 3
    :bomb 4
    :flag 5
    :? 6
    :flag-countdown 7
    :flagged-bomb 8
 })
+
+;; And quad-for-tile allows us to use symbolic tile names throughout the code
+;; (:covered, :flag, 3, :empty) and easily lookup the quad needed to draw the
+;; corrisponding image.
+(fn quad-for-tile [s]
+   (. tile-quads
+      (if (= (type s) :number) (+ s 8)
+         :else (. tile-for-name s))))
 
 ;; Now we can load the game in its initial state!
 
@@ -160,6 +168,7 @@
       (set selected-y
          (math.min grid-height (math.floor (+ 1 (/ y tile-size)))))))
 
+
 ;; Before we get to drawing the board we need one more piece of game state.
 ;; Countdown Mode is an alternative display mode. You can think if it this way:
 ;; instead of displaying in uncovered cells the number of adjacent bombs, you
@@ -175,64 +184,59 @@
 
 (var countdown-mode? true)
 
+;; The first step in drawing is deciding, for each cell in the grid, which tile
+;; to use to represent it. Each cell can be in one of four states:
+;;
+;;    :covered -> a blank, covered tile
+;;    :flags -> a covered tile that has been marked with a flag
+;;    :? -> a covered tile that has been marked with a question mark
+;;    :uncovered -> a tile the player has clicked to reveal what is beneath it
 
+;; Drawing a covered cell is simple. The only interesting behavior is that we
+;; draw a different tile while the game is in progress if the mouse is hovering
+;; over the cell, to create a sense of interactivity.
+(fn tile-for-covered-cell [hovering?]
+   (if (and hovering? (not (game-over?))) :covered-hover
+      :else :covered))
 
+;; For the flag there are two decisions to make. If the player has flagged a
+;; cell they are stating a belief that there is a bomb at that location.
+;; Therefore the game will not let the player click the cell to reveal it, as
+;; they would lose the game. However, we want to create a sense of interactivity
+;; —the feeling that the mouse click has been registered—so we change the cell
+;; to a normal :covered tile while the is being clicked.
+;;
+;; In addition, when the game is in countdown mode flags are special, as they
+;; decrease the adjacent counts. To emphasise that the flags are important in
+;; this mode, a different tile is drawn for them.
 
+(fn tile-for-flagged-cell [clicking?]
+   (if (and clicking? (not (game-over?))) :covered
+      countdown-mode? :flag-countdown
+      :else :flag))
 
-;; Which would I prefer to discuss first? Drawing the full board, or doing the
-;; game logic updates?
+;; Similar to flags, the player isn't allowed to directly reveal a :? cell. To
+;; preserve a sense of interactivity render a clicked on :? as :covered. Like
+;; with flags, when the game is over, we don't want to create the impression
+;; that cells can be clicked so they don't react to clicking.
+(fn tile-for-question-cell [clicking?]
+   (if (and clicking? (not (game-over?))) :covered
+      :else :?))
 
+;; Deciding what tile to draw for uncovered cells is more difficult as it
+;; depends on the number of adjacent bombs. If there are no adjacent bombs
+;; then the :empty tile will be drawn. Otherwise a tile with the appropriate
+;; number should be drawn.
+;;
+;; Later when we get to updating the game state there will be other pieces of
+;; code that need to do similar operations on the set of cells that are adjacent
+;; to the given cell. Thus we'll create a new iterator, ineighbors, that
+;; iterates through a cells neighbors!
 
-
-
-
-;; MAYBE DRAWING THE BASIC GRID? THAT FEELS LIKE IT SHOULD COME LATER.
-
-
-;; GAME PARAMS
-
-;; APP STATE
-
-(local font (love.graphics.newFont "lilliput-steps.ttf" 28))
-
-
-;; GAME STATE
-
-;; What relies on countdown-mode?
-;; keypressed -> deciding what to do in countdown-mode?
-;; drawing cells -> if there is a flag in countodwn mode
-;; drawing cells -> adjacent count
-;; counting surrounding bombs
-
-
-(fn tile-for-number [n]
-   (. tile-quads (+ n 8)))
-
-(fn tile-quad [name]
-   (. tile-quads (. tile-names name)))
-
-(fn number? [arg]
-   (= (type arg) :number))
-
-(fn draw-tile [name x y]
-   (var quad nil)
-
-   (if
-      (number? name)
-      (set quad (tile-for-number name))
-
-      (and countdown-mode? (= name :flag))
-      (set quad (tile-quad :flag-countdown))
-
-      :else
-      (set quad (tile-quad name)))
-
-   (love.graphics.draw image quad x y))
-
-;; This is the final TODO list, no more items can be added unless they are bugs.
-;; - Consider improving the graphics of 4 & 5
-;; - Move the flag part of the flagged bomb image higher
-;; - Redo the drawing system
+;; The main complication of ineighbors is filtering out cells that aren't valid
+;; because they're off the grid in one direction or another. The Fennel macro
+;; `-?>` is a "thread maybe" macro that only prefroms each subsequent operation
+;; if the result of the previous is non-nil.
 
 (fn ineighbors [x y]
    "Iterates over all the valid neighbors of point (x, y) as (nx, ny, cell)."
@@ -243,6 +247,84 @@
                (let [[nx ny] [(+ x dx) (+ y dy)]
                      cell (-?> grid (. ny) (. nx))]
                   (if cell (coroutine.yield nx ny cell)))))))))
+
+;; We can use ineighbors to write a straightforward calculation of the number of
+;; bombs adjacent to the given position. As mentioned above, in countdown mode
+;; any adjacent flags detract from the adjacency count, effectively create a
+;; count of "unaccounted for bombs".
+;;
+(fn surrounding-bombs [x y]
+   (var count 0)
+   (each [nx ny cell (ineighbors x y)]
+      (when (and countdown-mode? (= cell.state :flag))
+         (set count (- count 1)))
+      (when cell.bomb
+         (set count (+ count 1))))
+   (math.max 0 count))
+
+;; TODO: this "draw" wording is especially unappealing. Also, talk about
+;; returning the number as the symbol for the quad that is the numeric
+;; image. Or something.
+;;
+;; Now we have the tools we need to determine which tile to draw for an
+;; uncovered cell. If the player has revealed a bomb, draw it. If there are
+;; adjacent bombs draw the count. Otherwise draw an empty tile.
+
+(fn tile-for-uncovered-cell [x y bomb?]
+   (let [adjacent-bomb-count (surrounding-bombs x y)]
+      (if bomb? :bomb
+         (> adjacent-bomb-count 0) adjacent-bomb-count
+         :else :empty)))
+
+;; We can put it all together to get the tile needed to draw any cell.
+
+(fn tile-for-cell [x y cell]
+   ;; The state of the mouse influences what we draw, so record if the mouse is
+   ;; hovering over the current cell and if the current cell is being clicked.
+   (let [hovering? (and (= x selected-x) (= y selected-y))
+         clicking? (and hovering? (love.mouse.isDown 1))]
+
+      (match cell.state
+         :covered (tile-for-covered-cell hovering?)
+         :flag (tile-for-flagged-cell clicking?)
+         :? (tile-for-question-cell clicking?)
+         :uncovered (tile-for-uncovered-cell x y cell.bomb))))
+
+(fn draw-tile [name px py]
+   (love.graphics.draw image (quad-for-tile name) px py))
+
+;; Now we can draw the full grid. Of note is the special logic that happens when
+;; the game is over, where bombs are drawn instead of being hidden. In addition,
+;; bombs that were correctly flagged have a unique tile so the player can see
+;; which bombs they figured out and which they missed.
+
+(fn draw-grid []
+   (each [x y cell (icells)]
+
+      ;; TODO it still feels like there is room to improve this
+
+      ;; Find the default tile to draw for the cell
+      (var tile (tile-for-cell x y cell))
+
+      ;; If the game is over some cells should have bomb tiles draw insetad.
+      (when (and (game-over?) cell.bomb)
+         (if (= cell.state :flag)
+            (set tile :flagged-bomb)
+            :else
+            (set tile :bomb)))
+
+      (draw-tile
+         tile
+         (* (- x 1) tile-size)
+         (* (- y 1) tile-size))))
+
+
+
+;; --------------------------
+
+;; This is the final TODO list, no more items can be added unless they are bugs.
+;; - Consider improving the graphics of 4 & 5
+;; - Move the flag part of the flagged bomb image higher
 
 (fn love.keypressed [key]
    ;; quit the game
@@ -256,15 +338,6 @@
    ;; toggle countdown mode
    (when (= key :c)
       (set countdown-mode? (not countdown-mode?))))
-
-(fn surrounding-bombs [x y]
-   (var count 0)
-   (each [nx ny cell (ineighbors x y)]
-      (when (and countdown-mode? (= cell.state :flag))
-         (set count (- count 1)))
-      (when cell.bomb
-         (set count (+ count 1))))
-   count)
 
 (fn flood-uncover [x y]
    (local stack [[x y]])
@@ -286,13 +359,8 @@
                  (= (surrounding-bombs nx ny) 0))
          (flood-uncover nx ny))))
 
-(local covered-cell-transitions {
-   :covered :flag
-   :flag :?
-   :? :covered
-})
 
-
+;; TODO consider splitting this up into two pieces, game-won? and game-lost?
 (fn check-game-over! []
    "Check for a game over condition and potentially update the game state.
     The game is won when all non-bomb cells have been uncovered. The game is
@@ -315,6 +383,12 @@
 
       all-empty-spaces-uncovered
       (set game-state :won)))
+
+(local covered-cell-transitions {
+   :covered :flag
+   :flag :?
+   :? :covered
+})
 
 (fn love.mousereleased [x y button]
    (when (= game-state :init)
@@ -365,68 +439,17 @@
       :won
       "VICTORY! ALL BOMBS DISARMED! [R]ESTART"))
 
-(fn draw-tile-for-cell [x y cell]
-   (let [selected? (and (= x selected-x) (= y selected-y))
-         clicking? (love.mouse.isDown 1)
-         adjacent-bombs (surrounding-bombs x y)]
-
-      (if
-
-         ;; COVERED => mouse hover -> :covered-hover, else -> :covered
-         (= cell.state :covered)
-         (if (and selected? (not (game-over?))) :covered-hover
-             :else :covered)
-
-         ;; FLAG => mouse down -> :covered, else -> :flag
-         (= cell.state :flag)
-         (if (and selected? clicking?)
-            :covered
-            :else
-            :flag)
-
-         ;; QUESTION => mouse down -> :uncovered, else -> :?
-         (= cell.state :?)
-         (if (and selected? clicking?)
-            :uncovered
-            :else
-            :?)
-
-         ;; UNCOVERED =>
-         ;;    bomb? -> :bomb
-         ;;    adjacent bombs? -> count
-         ;;    else -> :uncovered
-         (= cell.state :uncovered)
-         (if cell.bomb
-            :bomb
-            (> adjacent-bombs 0)
-            adjacent-bombs
-            :else
-            :uncovered))))
-
 ;; it might be worth breaking these back up into independent draw routines
 ;; so they can be explained in their proper sections, instead of way here at
 ;; the end.
 ;;
 ;; the LP thing is definitely causing things to get grouped together
 ;; conceptually, which is interesting.
+
+(local font (love.graphics.newFont "lilliput-steps.ttf" 28))
+
 (fn love.draw []
+   (draw-grid)
    (love.graphics.setFont font)
-
-   (each [x y cell (icells)]
-      (let [cell (. grid y x)]
-         (var tile (draw-tile-for-cell x y cell))
-
-         ;; draw all bombs when game is over
-         (when (and (game-over?) cell.bomb)
-            (if (= cell.state :flag)
-               (set tile :flagged-bomb)
-               :else
-               (set tile :bomb)))
-
-         (draw-tile
-            tile
-            (* (- x 1) tile-size)
-            (* (- y 1) tile-size))))
-
    ;; Draw the status line
    (love.graphics.print (get-status-line) 6 557))
