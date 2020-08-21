@@ -1,3 +1,10 @@
+;; Lit Programming Meta Notes
+
+;; To make the sign posting clearer, I should be able to emit headers! Then
+;; the section headers can be the overall goal of that section.
+
+;; -------------------------
+
 ;; Fennel, like Lua, is simple enough that you can wrap your head around it and
 ;; dig in deep, and powerful enough that you can write elegant code that
 ;; expresses your intention clearly while providing a lot of depth to explore.
@@ -15,6 +22,8 @@
 
 ;; For literate programming, we want to rearrange the program to introduce
 ;; concepts in the best order for the reader.
+
+;; GAME MODELLING
 
 (local grid-width 19)
 (local grid-height 14)
@@ -34,6 +43,12 @@
 ;; examples is all that is needed, and the point that the number of arguments
 ;; to `tset` must be known at compile time, not when the function is called at
 ;; runtime or it won't work.
+;;
+;; Honestly, this was fun for me, but I think it is bad from an LP perspective
+;; because it is so, so, so unneccessary. In fact, I think it might be worth it
+;; to convert `grid` to be column-major so that I can go back to `(. grid ...)`
+;; and `(tset grid ...)` with `x y` in order throughout. `get-grid` and
+;; `set-grid` are only used in a couple of places anyway.
 (macro set-grid [x y ...]
    `(tset grid ,y ,x ,...))
 
@@ -63,6 +78,8 @@
 (fn init-game! []
    (set game-state :init)
    (reset-grid!))
+
+;; ## DRAWING THE GRID
 
 ;; However there is more to be done to load the game. We need to load our small
 ;; image atlas and setup some graphics state to easily draw the different images.
@@ -116,6 +133,8 @@
 (fn love.load []
    (load-images!)
    (init-game!))
+
+;; ### AN ASIDE: PLACING BOMBS
 
 ;; Before moving on to bomb placements, we're going to build a helpful utility
 ;; function that allows us to easily iterate through every cell in the grid.
@@ -178,6 +197,8 @@
             [x y] (table.remove possible-locations ndx)]
          (set-grid x y :bomb true))))
 
+;; ### STATE FOR DRAWING
+
 ;; Next we want to track where the player's mouse is pointing in terms of
 ;; cells in the grid. We create state to track the x and y coordinate of the
 ;; cell and update them each frame in love.update. All other updates are tied
@@ -202,7 +223,6 @@
       (set selected-y
          (math.min grid-height (math.floor (+ 1 (/ y tile-size)))))))
 
-
 ;; Before we get to drawing the board we need one more piece of game state.
 ;; Countdown Mode is an alternative display mode. You can think if it this way:
 ;; instead of displaying in uncovered cells the number of adjacent bombs, you
@@ -217,6 +237,8 @@
 ;; to prefer :D
 
 (var countdown-mode? true)
+
+;; ### DRAWING FOR REAL THIS TIME
 
 ;; The first step in drawing is deciding, for each cell in the grid, which tile
 ;; to use to represent it. Each cell can be in one of four states:
@@ -353,9 +375,7 @@
          (* (- x 1) tile-size)
          (* (- y 1) tile-size))))
 
-;; -------------------------------------------------------------
-;; -- Above this line is first draft essay, below is no essay --
-;; -------------------------------------------------------------
+;; ## GAME PLAY
 
 ;; Now we're ready to get into the actual gameplay!
 
@@ -551,6 +571,8 @@
 
    (let [(over? next-state) (game-over?)]
       (when over? (set game-state next-state))))
+
+;; ## FINAL TOUCHES
 
 ;; The last way the player can interact with the game is by pressing certain
 ;; keys. :escape quits the game, :r restarts it, and :c toggles countdown mode.
