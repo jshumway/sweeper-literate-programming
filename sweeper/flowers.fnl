@@ -11,6 +11,17 @@
 
 (local grid {})
 
+;; TODO: (. ...) lets you combine multiple accessors instead of nesting
+(fn get-grid [x y]
+   (. grid y x))
+
+;; TODO: maybe this is more trouble than it is worth, but I think a few
+;; examples is all that is needed, and the point that the number of arguments
+;; to `tset` must be known at compile time, not when the function is called at
+;; runtime or it won't work.
+(macro set-grid [x y ...]
+   `(tset grid ,y ,x ,...))
+
 ;; Bombs won't be placed until after the player has first clicked on a space,
 ;; to ensure the player cannot lose on their first turn.
 (fn reset-grid! []
@@ -150,7 +161,7 @@
    (for [i 1 bomb-count]
       (let [ndx (love.math.random (length possible-locations))
             [x y] (table.remove possible-locations ndx)]
-         (tset grid y x :bomb true))))
+         (set-grid x y :bomb true))))
 
 ;; Next we want to track where the player's mouse is pointing in terms of
 ;; cells in the grid. We create state to track the x and y coordinate of the
@@ -161,6 +172,14 @@
 (var selected-x 0)
 (var selected-y 0)
 
+;; A small helper to get the cell that the mouse is hovering over.
+(fn selected-cell []
+   (get-grid selected-x selected-y))
+
+;; Note that this means we will always have a cell selected because the actual
+;; mouse location is bound to the grid. This is nice because we never need to
+;; worry about the mouse clicking anywhere besides the grid, or not having a
+;; cell selected.
 (fn love.update []
    (let [(x y) (love.mouse.getPosition)]
       (set selected-x
@@ -322,28 +341,11 @@
 
 ;; --------------------------
 
-;; This is the final TODO list, no more items can be added unless they are bugs.
-;; - Consider improving the graphics of 4 & 5
-;; - Move the flag part of the flagged bomb image higher
-
-(fn love.keypressed [key]
-   ;; quit the game
-   (when (= key :escape)
-      (love.event.quit))
-
-   ;; reset the game
-   (when (= key :r)
-      (init-game!))
-
-   ;; toggle countdown mode
-   (when (= key :c)
-      (set countdown-mode? (not countdown-mode?))))
-
 (fn flood-uncover [x y]
    (local stack [[x y]])
    (while (> (# stack) 0)
       (let [[x y] (table.remove stack)]
-         (tset grid y x :state :uncovered)
+         (set-grid x y :state :uncovered)
          (when (= (surrounding-bombs x y) 0)
             (each [nx ny cell (ineighbors x y)]
                (when (or (= cell.state :covered) (= cell.state :?))
@@ -384,43 +386,53 @@
       all-empty-spaces-uncovered
       (set game-state :won)))
 
+(fn uncover-initial-cell! []
+   (set game-state :play)
+   (place-bombs! selected-x selected-y)
+   (flood-uncover selected-x selected-y))
+
+(fn uncover-cell! []
+   (let [cell (selected-cell)]
+      (if (~= cell.state :flag)
+         (if cell.bomb
+            (set cell.state :uncovered)
+            :else
+            (flood-uncover selected-x selected-y)))))
+
 (local covered-cell-transitions {
    :covered :flag
    :flag :?
    :? :covered
 })
 
+(fn mark-cell! []
+   (let [cell (selected-cell)
+         next (. covered-cell-transitions cell.state)]
+      (set-grid selected-x selected-y :state next)
+      (when (and countdown-mode? (= next :flag))
+         (flood-uncover-flag selected-x selected-y))))
+
 (fn love.mousereleased [x y button]
-   (when (= game-state :init)
+   (match game-state
+      :init
       (when (= button 1)
-         (set game-state :play)
-         (place-bombs! selected-x selected-y)
-         (flood-uncover selected-x selected-y)))
+         (uncover-initial-cell!))
 
-   (when (= game-state :play)
-      (let [cell (. grid selected-y selected-x)]
-
-         (when (= button 1)
-            (if (~= cell.state :flag)
-               (if cell.bomb
-                  (set cell.state :uncovered)
-                  :else
-                  (flood-uncover selected-x selected-y))))
-
-         (when (= button 2)
-            (let [next (. covered-cell-transitions cell.state)]
-               (when next
-                  (tset grid selected-y selected-x :state next))
-                  (when (and countdown-mode? (= next :flag))
-                     (flood-uncover-flag selected-x selected-y))))))
+      :play
+      (if (= button 1)
+         (uncover-cell!)
+         (= button 2)
+         (mark-cell!)))
 
    (check-game-over!))
+
 
 (fn count-cells [pred]
    (var c 0)
    (each [_ _ cell (icells)]
       (if (pred cell) (set c (+ c 1))))
    c)
+
 
 (fn get-status-line []
    (match game-state
@@ -445,6 +457,19 @@
 ;;
 ;; the LP thing is definitely causing things to get grouped together
 ;; conceptually, which is interesting.
+
+(fn love.keypressed [key]
+   ;; quit the game
+   (when (= key :escape)
+      (love.event.quit))
+
+   ;; reset the game
+   (when (= key :r)
+      (init-game!))
+
+   ;; toggle countdown mode
+   (when (= key :c)
+      (set countdown-mode? (not countdown-mode?))))
 
 (local font (love.graphics.newFont "lilliput-steps.ttf" 28))
 
