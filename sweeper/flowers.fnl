@@ -1,3 +1,7 @@
+;; Fennel, like Lua, is simple enough that you can wrap your head around it and
+;; dig in deep, and powerful enough that you can write elegant code that
+;; expresses your intention clearly while providing a lot of depth to explore.
+
 ;; For literate programming, we want to rearrange the program to introduce
 ;; concepts in the best order for the reader.
 
@@ -272,6 +276,7 @@
 ;; any adjacent flags detract from the adjacency count, effectively create a
 ;; count of "unaccounted for bombs".
 ;;
+;; TODO I might be able to clean this up
 (fn surrounding-bombs [x y]
    (var count 0)
    (each [nx ny cell (ineighbors x y)]
@@ -337,19 +342,32 @@
          (* (- x 1) tile-size)
          (* (- y 1) tile-size))))
 
-
-
-;; --------------------------
+;; -------------------------------------------------------------
+;; -- Above this line is first draft essay, below is no essay --
+;; -------------------------------------------------------------
 
 (fn flood-uncover [x y]
    (local stack [[x y]])
-   (while (> (# stack) 0)
+   (while (> (length stack) 0)
       (let [[x y] (table.remove stack)]
          (set-grid x y :state :uncovered)
          (when (= (surrounding-bombs x y) 0)
             (each [nx ny cell (ineighbors x y)]
                (when (or (= cell.state :covered) (= cell.state :?))
                   (table.insert stack [nx ny])))))))
+
+(fn uncover-cell! []
+   (let [cell (selected-cell)]
+      (if (~= cell.state :flag)
+         (if cell.bomb
+            (set cell.state :uncovered)
+            :else
+            (flood-uncover selected-x selected-y)))))
+
+(fn uncover-initial-cell! []
+   (set game-state :play)
+   (place-bombs! selected-x selected-y)
+   (flood-uncover selected-x selected-y))
 
 (fn flood-uncover-flag [x y]
    "Marking a flag in countdown mode causes adjacent spaces that now show
@@ -360,44 +378,6 @@
       (when (and (= cell.state :uncovered)
                  (= (surrounding-bombs nx ny) 0))
          (flood-uncover nx ny))))
-
-
-;; TODO consider splitting this up into two pieces, game-won? and game-lost?
-(fn check-game-over! []
-   "Check for a game over condition and potentially update the game state.
-    The game is won when all non-bomb cells have been uncovered. The game is
-    lost when a bomb cell has been uncovered."
-
-   (var all-empty-spaces-uncovered true)
-   (var all-bombs-covered true)
-
-   (each [x y cell (icells)]
-      ;; if there is a covered non-bomb cell the game has not been won
-      ;; if there is an uncovered bomb cell the game has been lost
-      (if (and cell.bomb (= cell.state :uncovered))
-         (set all-bombs-covered false)
-
-         (and (not cell.bomb) (= cell.state :covered))
-         (set all-empty-spaces-uncovered false)))
-
-   (if (not all-bombs-covered)
-      (set game-state :lost)
-
-      all-empty-spaces-uncovered
-      (set game-state :won)))
-
-(fn uncover-initial-cell! []
-   (set game-state :play)
-   (place-bombs! selected-x selected-y)
-   (flood-uncover selected-x selected-y))
-
-(fn uncover-cell! []
-   (let [cell (selected-cell)]
-      (if (~= cell.state :flag)
-         (if cell.bomb
-            (set cell.state :uncovered)
-            :else
-            (flood-uncover selected-x selected-y)))))
 
 (local covered-cell-transitions {
    :covered :flag
@@ -412,6 +392,30 @@
       (when (and countdown-mode? (= next :flag))
          (flood-uncover-flag selected-x selected-y))))
 
+
+;; count-cells is a helper function that takes a predicate and applies it to
+;; each cell in the grid. If the predicate returns true, the overall count is
+;; increased by 1.
+(fn count-cells [pred]
+   (var c 0)
+   (each [_ _ cell (icells)]
+      (if (pred cell) (set c (+ c 1))))
+   c)
+
+(fn game-over? []
+   "Returns (true, next-game-state) if the game is over, otherwise false."
+   (let [uncovered-bomb #(and $.bomb (= $.state :uncovered))
+         covered-empty-cell #(and (not $.bomb) (= $.state :covered))]
+      (if
+         (> (count-cells uncovered-bomb) 0)
+         (values true :lost)
+
+         (= (count-cells covered-empty-cell) 0)
+         (values true :won)
+
+         :else
+         false)))
+
 (fn love.mousereleased [x y button]
    (match game-state
       :init
@@ -424,15 +428,21 @@
          (= button 2)
          (mark-cell!)))
 
-   (check-game-over!))
+   (let [(over? next-state) (game-over?)]
+      (when over? (set game-state next-state))))
 
+(fn love.keypressed [key]
+   ;; quit the game
+   (when (= key :escape)
+      (love.event.quit))
 
-(fn count-cells [pred]
-   (var c 0)
-   (each [_ _ cell (icells)]
-      (if (pred cell) (set c (+ c 1))))
-   c)
+   ;; reset the game
+   (when (= key :r)
+      (init-game!))
 
+   ;; toggle countdown mode
+   (when (= key :c)
+      (set countdown-mode? (not countdown-mode?))))
 
 (fn get-status-line []
    (match game-state
@@ -451,30 +461,10 @@
       :won
       "VICTORY! ALL BOMBS DISARMED! [R]ESTART"))
 
-;; it might be worth breaking these back up into independent draw routines
-;; so they can be explained in their proper sections, instead of way here at
-;; the end.
-;;
-;; the LP thing is definitely causing things to get grouped together
-;; conceptually, which is interesting.
-
-(fn love.keypressed [key]
-   ;; quit the game
-   (when (= key :escape)
-      (love.event.quit))
-
-   ;; reset the game
-   (when (= key :r)
-      (init-game!))
-
-   ;; toggle countdown mode
-   (when (= key :c)
-      (set countdown-mode? (not countdown-mode?))))
-
 (local font (love.graphics.newFont "lilliput-steps.ttf" 28))
 
 (fn love.draw []
    (draw-grid)
+
    (love.graphics.setFont font)
-   ;; Draw the status line
    (love.graphics.print (get-status-line) 6 557))
