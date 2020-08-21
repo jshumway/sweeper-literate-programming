@@ -2,6 +2,17 @@
 ;; dig in deep, and powerful enough that you can write elegant code that
 ;; expresses your intention clearly while providing a lot of depth to explore.
 
+;; TODO explain the basic rules of minesweeper in terms of covered and
+;; uncovered. That you're revealing the grid.
+
+;; Major constraint is that, in Lua, symbols must be defined before they can be
+;; used, it isn't enough that they're in the same file, or that the symbol has
+;; been defined by the time the code using it is run. Thus this lp essay is
+;; present in an "inductive" style, where we build up the pieces we need before
+;; combining them to reach our goal. I try to provide the high level game
+;; motivation to help you keep track of where we're headed and what we're build
+;; up to.
+
 ;; For literate programming, we want to rearrange the program to introduce
 ;; concepts in the best order for the reader.
 
@@ -15,7 +26,7 @@
 
 (local grid {})
 
-;; TODO: (. ...) lets you combine multiple accessors instead of nesting
+;; TODO: `.` lets you combine multiple accessors instead of nesting
 (fn get-grid [x y]
    (. grid y x))
 
@@ -346,6 +357,37 @@
 ;; -- Above this line is first draft essay, below is no essay --
 ;; -------------------------------------------------------------
 
+;; Now we're ready to get into the actual gameplay!
+
+;; The main form of gameplay is clicking on a cell to reveal. However, in
+;; minesweeper when you reveal a cell there is a chance that it'll cause many
+;; surrounding neighbor cells to also reveal themselves.
+;;
+;; Specifically, if you reveal a cell and it has no adjacent bombs, then it is
+;; trivial to know that all surrounding eight cells are safe to reveal as well.
+;; So the game goes ahead and does this for you. This isn't just to save the
+;; player the annoyence of revealing cells that they don't have to think about
+;; to know are safe, it is also a nice effect that can drastically alter how the
+;; board looks, which is a nice gameplay hook.
+;;
+;; We'll call this a "flood uncover". It is important to know that any uncover
+;; action has the potential to be a flood uncover, so we need to run this
+;; algorithm each time the player clicks a cell.
+;;
+;; The algorithm is a basic breadth first search starting with the coordinate
+;; that the player clicked. If the surrounding count is 0, then each covered
+;; neighbor is added to the queue and the process repeats. In this way the
+;; uncover action "floods outwards" until it runs into a "border" where each
+;; cell in the border has an adjacent bomb count greater than 0.
+;;
+;; One other caveat to note is that cells marked with a flag will never be
+;; uncovered automatically. In non-countdown mode a flag next to an uncovered
+;; cell would be an obvious player error, but in countdown mode where the 0
+;; adjacent count means "no more unaccounted for bombs", revaling a flagged cell
+;; could cause the player to lose the game! If you're wondering "wait, does that
+;; mean we need to flood uncover when a cell is marked with a flag too?", Yes!
+;; We'll get there soon.
+
 (fn flood-uncover [x y]
    (local stack [[x y]])
    (while (> (length stack) 0)
@@ -356,6 +398,15 @@
                (when (or (= cell.state :covered) (= cell.state :?))
                   (table.insert stack [nx ny])))))))
 
+;; With flood-uncover in hand, we can implement the full uncover-cell action
+;; that we'll bind to left-click. We won't uncover a flag cell to prevent
+;; misclicks from causing the player to lose.
+;;
+;; The only thing here is that, if the player clicked a bomb cell, we don't do
+;; the flood unfill. The only impact here is how the grid looks when it is
+;; frozen on the lose screen: only the bomb will be revealed, not any adjacent
+;; empty cells.
+
 (fn uncover-cell! []
    (let [cell (selected-cell)]
       (if (~= cell.state :flag)
@@ -364,10 +415,34 @@
             :else
             (flood-uncover selected-x selected-y)))))
 
+;; If you recall from earlier, the initial left click is a special case: there
+;; are no bombs, we need to place them _after_ the initial cell is uncovered.
+;; Here is a modification of the above for this case: move the game from :init
+;; state to :play state, place the random bombs, then flood uncover the
+;; initially selected cell.
+
 (fn uncover-initial-cell! []
    (set game-state :play)
    (place-bombs! selected-x selected-y)
    (flood-uncover selected-x selected-y))
+
+;; Above I alluded to the fact that, when a cell has no adjacent bombs, all of
+;; its neighbors are trivially safe to reveal without any interesting thought on
+;; the part of the player required. Uncovering a cell can reveal a that it has
+;; no adjacent bombs, and thus trigger a flood uncover.
+;;
+;; However, in countdown mode, _placing a flag_ causes all neighboring cells to
+;; have their adjacent bomb count decrease by 1, potentially to zero! Thus it
+;; creates a state where we might need to flood uncover more cells! In this way
+;; placing a flag in countdown-mode is actually a risky action, just like
+;; uncovering a cell is. If you flag the wrong cell, you might cause the flood
+;; unfill to reveal a bomb! This is why I've highlighted flags yellow in
+;; countdown mode.
+;;
+;; The algorithm to make this happen is simple: when the player flags a cells,
+;; look at each neighbor of the new flag, as this is the set of cells whose
+;; adjacent bomb count will have changed. For each of them with a new adjacent
+;; bomb count of zero, initiate a flood-uncover starting at that cell.
 
 (fn flood-uncover-flag [x y]
    "Marking a flag in countdown mode causes adjacent spaces that now show
@@ -379,11 +454,21 @@
                  (= (surrounding-bombs nx ny) 0))
          (flood-uncover nx ny))))
 
+;; Now we can talk about the final action we'll be binding to mouse clicks:
+;; marking cells. There are three ways a cell can be marked: :covered (unmarked),
+;; :flag, and :?. Right clicking on a cell cycles through these three states.
+;; This map encodes those transitions: if you're :covered, move to :flag. If
+;; you're :flag, move to :?, and so on.
+
 (local covered-cell-transitions {
    :covered :flag
    :flag :?
    :? :covered
 })
+
+;; And the action itself. Get the next mark state and transition the cell in
+;; question to it. And, if we're in countdown mode and just marked a cell as a
+;; flag, run the flood-uncover-flag routine from above.
 
 (fn mark-cell! []
    (let [cell (selected-cell)
@@ -392,29 +477,65 @@
       (when (and countdown-mode? (= next :flag))
          (flood-uncover-flag selected-x selected-y))))
 
+;; With those three actions implemented, there is only one more thing we need to
+;; handle mouse interactions: detecting if the game is over. If the player has
+;; revealed a bomb, the game is lost. If the player has revealed each covered
+;; cell without a bomb, they have won.
 
+
+;; TODO: umm, how much do I really need to explain this? Probably just the
+;; predicate function part.
+;; ----------
 ;; count-cells is a helper function that takes a predicate and applies it to
 ;; each cell in the grid. If the predicate returns true, the overall count is
 ;; increased by 1.
+;; ----------
+;; To help determine if either of these conditions has been met we'll build a
+;; few helper functions. This one takes a predicate function that, when given
+;; a cell from the grid, returns true or false. The predicate function is called
+;; on each cell in the grid, and each time true is returned a conuter is
+;; incremented.
 (fn count-cells [pred]
    (var c 0)
    (each [_ _ cell (icells)]
       (if (pred cell) (set c (+ c 1))))
    c)
 
+;; Could also be defined as: #(and $.bomb (= $.state :uncovered))
+(fn uncovered-bomb? [cell]
+   (and cell.bomb (= cell.state :uncovered)))
+
+;; Could also be defined as: #(and (not $.bomb) (= $.state :covered))
+(fn covered-empty-cell? [cell]
+   (and (not cell.bomb) (= cell.state :covered)))
+
+;; game-over? simply combines the above helpers: if there are any uncovered
+;; bombs the player has lost. If there are no more covered empty cells, they've
+;; won.
+;;
+;; Of note: this function returns multiple values. If the game is over it
+;; returns both `true` and the next state for the game to move to, `:lost`.
+;; The Fennel special form `values` lets us return multiple values in this way.
+
 (fn game-over? []
    "Returns (true, next-game-state) if the game is over, otherwise false."
-   (let [uncovered-bomb #(and $.bomb (= $.state :uncovered))
-         covered-empty-cell #(and (not $.bomb) (= $.state :covered))]
-      (if
-         (> (count-cells uncovered-bomb) 0)
-         (values true :lost)
+   (if (> (count-cells uncovered-bomb?) 0)
+      (values true :lost)
 
-         (= (count-cells covered-empty-cell) 0)
-         (values true :won)
+      (= (count-cells covered-empty-cell?) 0)
+      (values true :won)
 
-         :else
-         false)))
+      :else
+      false))
+
+;; And now, finally, we can combine all of the above to handle the majority of
+;; player interaction with the game. The interactions are broken down by game
+;; state.
+;;
+;; Finally, after any uncovering has been executed, we check if the game is
+;; over and update the state if it is. Notice how the `let` syntax for
+;; destructuring multiple return values is a little different, but also
+;; familiar.
 
 (fn love.mousereleased [x y button]
    (match game-state
@@ -431,18 +552,38 @@
    (let [(over? next-state) (game-over?)]
       (when over? (set game-state next-state))))
 
+;; The last way the player can interact with the game is by pressing certain
+;; keys. :escape quits the game, :r restarts it, and :c toggles countdown mode.
+;; Restarting the game is as simple as re-running `init-game!`, which both
+;; clears the grid and moves the game-state back to :init.
+
 (fn love.keypressed [key]
-   ;; quit the game
-   (when (= key :escape)
-      (love.event.quit))
+   (match key
+      ;; quit the game
+      :escape
+      (love.event.quit)
 
-   ;; reset the game
-   (when (= key :r)
-      (init-game!))
+      ;; reset the game
+      :r
+      (init-game!)
 
-   ;; toggle countdown mode
-   (when (= key :c)
+      ;; toggle countdown mode
+      :c
       (set countdown-mode? (not countdown-mode?))))
+
+;; To round out the game, we'll build a status line to give the player some
+;; feedback. The contents of the status line will depend on the game's state.
+;;
+;; :play and :lost are the interesting one. :play shows if the game is in
+;; countdown or normal mode, and the number of flags placed compared to the
+;; total number of bombs. The latter is always fixed, but the former needs to
+;; be calculated. We use the same helper developed above for checking win and
+;; loss conditions. This time we use the Fennel feature `hashfn`s, a convenient
+;; shorthand function definition syntax useful for exactly these kinds of small
+;; predicate functions.
+;;
+;; Similarly, in the :lost state we want to tell the player how many bombs were
+;; left unflagged.
 
 (fn get-status-line []
    (match game-state
@@ -461,10 +602,18 @@
       :won
       "VICTORY! ALL BOMBS DISARMED! [R]ESTART"))
 
+;; We load a font to render the status bar text with...
+
 (local font (love.graphics.newFont "lilliput-steps.ttf" 28))
+
+;; A simple routine to draw the status bar in the right place...
+
+(fn draw-status-bar []
+   (love.graphics.setFont font)
+   (love.graphics.print (get-status-line) 6 557))
+
+;; And we draw the two major display elements, the grid and the status bar.
 
 (fn love.draw []
    (draw-grid)
-
-   (love.graphics.setFont font)
-   (love.graphics.print (get-status-line) 6 557))
+   (draw-status-bar))
